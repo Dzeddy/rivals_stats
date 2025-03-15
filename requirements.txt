@@ -20,3 +20,5 @@ matplotlib>=3.7.1
 # Optional: For advanced data manipulation
 numpy>=1.24.3
 geckodriver
+firefox-esr
+seleniumbase
