@@ -1,0 +1,21 @@
+# Core dependencies
+streamlit>=1.22.0
+pandas>=1.5.0
+selenium>=4.9.0
+webdriver-manager>=3.8.6
+
+# Time handling
+python-dateutil>=2.8.2
+
+# JSON processing
+jsonschema>=4.17.3
+
+# Web interactions
+requests>=2.28.2
+
+# Optional: For enhanced visualizations
+plotly>=5.14.0
+matplotlib>=3.7.1
+
+# Optional: For advanced data manipulation
+numpy>=1.24.3
