@@ -17,20 +17,24 @@ from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from webdriver_manager.firefox import GeckoDriverManager
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException
 
-def create_chrome_options():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Run without opening a browser
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    return chrome_options
+# 2. Replace the create_chrome_options function with this
+def create_firefox_options():
+    firefox_options = FirefoxOptions()
+    firefox_options.add_argument("--headless")
+    firefox_options.add_argument("--no-sandbox")
+    firefox_options.add_argument("--disable-dev-shm-usage")
+    return firefox_options
 
-# Force WebDriver to use a specific version
+# 3. Replace the driver initialization (around line 30) with this
 try:
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=create_chrome_options())
+    driver = webdriver.Firefox(service=FirefoxService(GeckoDriverManager().install()),
+                              options=create_firefox_options())
 except Exception as e:
     print(f"Error initializing WebDriver: {e}")
 
@@ -42,13 +46,13 @@ def load_data(file) -> dict:
 
 class SeleniumManager:
     """
-    Context manager for Selenium WebDriver.
+    Context manager for Selenium WebDriver using Firefox.
 
     This class simplifies driver creation and cleanup.
     """
 
     def __init__(self):
-        self.driver = webdriver.Chrome(options=create_chrome_options())
+        self.driver = webdriver.Firefox(options=create_firefox_options())
         # Hide Selenium property for more natural behavior.
         self.driver.execute_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -68,7 +72,7 @@ def fetch_detailed_match_data(match_id, driver=None):
     """
     should_close_driver = False
     if driver is None:
-        driver = webdriver.Chrome(options=create_chrome_options())
+        driver = webdriver.Firefox(options=create_firefox_options())
         driver.execute_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
@@ -281,7 +285,7 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
     driver = None
 
     if detailed:
-        driver = webdriver.Chrome(options=create_chrome_options())
+        driver = webdriver.Firefox(options=create_firefox_options())
         driver.execute_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
