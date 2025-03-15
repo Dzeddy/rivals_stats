@@ -2,7 +2,7 @@
 """
 Marvel Rivals Tournament Dashboard
 
-This module loads player JSON data, fetches detailed match data via direct API requests,
+This module loads player JSON data, fetches detailed match data via Selenium,
 clusters tournament matches, extracts per‑10 and aggregate player statistics,
 and displays an interactive dashboard where you can sort team members by any
 displayed stat and view an overview of team performance.
@@ -16,7 +16,23 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 import pandas as pd
-import requests
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.options import Options
+
+def create_chrome_options():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Run without opening a browser
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    return chrome_options
+
+# Force WebDriver to use a specific version
+try:
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=create_chrome_options())
+except Exception as e:
+    print(f"Error initializing WebDriver: {e}")
 
 
 def load_data(file) -> dict:
@@ -24,100 +40,65 @@ def load_data(file) -> dict:
     return json.load(file)
 
 
-def fetch_detailed_match_data(match_id):
+class SeleniumManager:
     """
-    Fetch detailed match data using Streamlit's component API to make the request
-    from the client side instead of the server side.
+    Context manager for Selenium WebDriver.
+
+    This class simplifies driver creation and cleanup.
+    """
+
+    def __init__(self):
+        self.driver = webdriver.Chrome(options=create_chrome_options())
+        # Hide Selenium property for more natural behavior.
+        self.driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+
+    def __enter__(self):
+        return self.driver
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.driver.quit()
+
+
+def fetch_detailed_match_data(match_id, driver=None):
+    """
+    Fetch detailed match data using Selenium.
     Returns a dictionary with the match details.
     """
+    should_close_driver = False
+    if driver is None:
+        driver = webdriver.Chrome(options=create_chrome_options())
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        should_close_driver = True
+
     try:
-        time.sleep(3)
         url = f"https://api.tracker.gg/api/v2/marvel-rivals/standard/matches/{match_id}"
         st.info(f"Fetching detailed data for match {match_id}")
+        driver.get(url)
+        time.sleep(3)  # wait for content to load
 
-        # Using st.components.v1.html to make the request from the client side
-        fetch_script = f"""
-        <div id="result_{match_id}">Loading match data...</div>
-        <script>
-            (async () => {{
-                try {{
-                    const headers = {{
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                        "Accept": "application/json",
-                        "Referer": "https://tracker.gg/marvel-rivals/"
-                    }};
+        try:
+            json_text = driver.find_element(By.TAG_NAME, "pre").text
+        except NoSuchElementException:
+            page_source = driver.page_source
+            start = page_source.find('{')
+            end = page_source.rfind('}') + 1
+            if start >= 0 and end > start:
+                json_text = page_source[start:end]
+            else:
+                raise Exception("Could not find JSON content in the page")
 
-                    const response = await fetch("{url}", {{
-                        method: "GET",
-                        headers: headers
-                    }});
-
-                    if (!response.ok) {{
-                        throw new Error(`HTTP error! Status: ${{response.status}}`);
-                    }}
-
-                    const data = await response.json();
-
-                    // Store the result in session storage
-                    sessionStorage.setItem("match_data_{match_id}", JSON.stringify(data));
-
-                    // Update the display
-                    document.getElementById("result_{match_id}").innerHTML = "Match data fetched successfully!";
-
-                    // Notify Streamlit
-                    window.parent.postMessage({{
-                        type: "streamlit:setComponentValue",
-                        value: {{ success: true, match_id: "{match_id}" }}
-                    }}, "*");
-
-                }} catch (error) {{
-                    console.error("Error fetching match data:", error);
-                    document.getElementById("result_{match_id}").innerHTML = `Error: ${{error.message}}`;
-
-                    // Notify Streamlit of the error
-                    window.parent.postMessage({{
-                        type: "streamlit:setComponentValue",
-                        value: {{ success: false, error: error.message, match_id: "{match_id}" }}
-                    }}, "*");
-                }}
-            }})();
-        </script>
-        """
-
-        # Execute the fetch from client-side
-        result = st.components.v1.html(fetch_script, height=50, key=f"fetch_{match_id}")
-
-        # Check if we got a result
-        if result and result.get('success'):
-            # Create a placeholder to display the data retrieval
-            placeholder = st.empty()
-            placeholder.success(f"Data for match {match_id} fetched successfully!")
-
-            # In a real implementation, you would retrieve the data from session storage
-            # For this example, we'll use a fallback approach
-            # This is a simulation - in a real app, you'd need a way to get the data from sessionStorage
-
-            # Fallback to direct fetch if needed (just for this demonstration)
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Accept": "application/json",
-                "Referer": "https://tracker.gg/marvel-rivals/"
-            }
-
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-
-            placeholder.empty()
-            return data.get('data', data)
-        else:
-            error_msg = result.get('error', 'Unknown error') if result else 'No response from client'
-            st.error(f"Error fetching match {match_id}: {error_msg}")
-            return None
-
+        data = json.loads(json_text)
+        return data.get('data', data)
     except Exception as e:
         st.error(f"Error fetching match {match_id}: {e}")
-        return Non
+        return None
+    finally:
+        if should_close_driver:
+            driver.quit()
 
 
 def cluster_tournament_matches(data):
@@ -180,7 +161,7 @@ def extract_player_stats(match_data, player_ign):
     main_team = None
     for segment in match_data.get('segments', []):
         if segment.get('type') == 'player' and (
-                segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
+            segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
         ):
             main_team = segment['metadata'].get('teamId')
             break
@@ -237,9 +218,9 @@ def extract_player_stats(match_data, player_ign):
         # Calculate accuracy if possible.
         if player_info.get('mainAttacks', 0) > 0:
             player_info['accuracy'] = (
-                                              player_info.get('mainAttackHits', 0) /
-                                              player_info.get('mainAttacks', 0)
-                                      ) * 100
+                player_info.get('mainAttackHits', 0) /
+                player_info.get('mainAttacks', 0)
+            ) * 100
         else:
             player_info['accuracy'] = 0
 
@@ -258,8 +239,8 @@ def extract_player_stats(match_data, player_ign):
         if total_kills:
             for p in group:
                 p['kill_participation'] = (
-                                                  (p.get('kills', 0) + p.get('assists', 0)) / total_kills
-                                          ) * 100
+                    (p.get('kills', 0) + p.get('assists', 0)) / total_kills
+                ) * 100
 
     return team_stats, opponent_stats
 
@@ -285,7 +266,7 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
     for match in data.get('matches', []):
         for segment in match.get('segments', []):
             if segment.get('type') == 'overview' and (
-                    segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
+                segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
             ):
                 player_team = segment['metadata'].get('teamId')
                 break
@@ -297,6 +278,13 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
 
     tournaments_cluster = cluster_tournament_matches(data)
     tournament_results = []
+    driver = None
+
+    if detailed:
+        driver = webdriver.Chrome(options=create_chrome_options())
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
 
     try:
         for idx, tournament in enumerate(tournaments_cluster):
@@ -339,7 +327,7 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
                         detailed_match = json.load(f)
 
                 if detailed and not detailed_match:
-                    detailed_match = fetch_detailed_match_data(match_id)
+                    detailed_match = fetch_detailed_match_data(match_id, driver)
                     if cache_file and detailed_match:
                         with open(cache_file, 'w') as f:
                             json.dump(detailed_match, f, indent=2)
@@ -478,9 +466,9 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
 
             tournament_results.append(tournament_info)
         return tournament_results
-    except Exception as e:
-        st.error(f"Error analyzing tournaments: {e}")
-        return []
+    finally:
+        if driver:
+            driver.quit()
 
 
 def player_stats_to_df(player_stats: dict) -> pd.DataFrame:
@@ -497,7 +485,7 @@ def player_stats_to_df(player_stats: dict) -> pd.DataFrame:
             "Best KDA": round(stats["best_kda"], 2),
             "Avg KDA": round(stats["avg_kda"], 2),
             "Avg Final Blows": round(stats["avg_last_kills"], 2),
-            "Avg Solo Kills": round(stats["avg_solo_kills"], 2),
+            "Avg Solo Kils": round(stats["avg_solo_kills"], 2),
             "K/D/A": f"{stats['avg_kills']:.1f}/{stats['avg_deaths']:.1f}/{stats['avg_assists']:.1f}",
             "Avg Damage": round(stats["avg_damage"], 0),
             "Avg Healing": round(stats["avg_healing"], 0),
@@ -532,7 +520,7 @@ if uploaded_file is not None:
         st.error(f"Error loading file: {e}")
         st.stop()
 
-    # Option to run detailed analysis (will fetch match data via API)
+    # Option to run detailed analysis (will fetch match data via Selenium)
     detailed_mode = st.checkbox("Use detailed match data (may take longer)", value=True)
 
     with st.spinner("Analyzing tournaments..."):
@@ -553,8 +541,7 @@ if uploaded_file is not None:
     st.subheader(f"Tournament #{tournament['id']} Overview")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown(
-            f"**Date:** {tournament['start_date'].strftime('%Y-%m-%d')} to {tournament['end_date'].strftime('%Y-%m-%d')}")
+        st.markdown(f"**Date:** {tournament['start_date'].strftime('%Y-%m-%d')} to {tournament['end_date'].strftime('%Y-%m-%d')}")
     with col2:
         st.markdown(f"**Matches:** {tournament['match_count']}")
     with col3:
