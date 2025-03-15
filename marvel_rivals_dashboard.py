@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
 """
-Refactored Marvel Rivals Tournament Analysis
+Marvel Rivals Tournament Dashboard
 
 This module loads player JSON data, fetches detailed match data via Selenium,
 clusters tournament matches, extracts per‑10 and aggregate player statistics,
-and generates both match‐ and tournament‑level reports.
+and displays an interactive dashboard where you can sort team members by any
+displayed stat and view an overview of team performance.
 """
 
-import argparse
 import json
 import os
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 
+import streamlit as st
+import pandas as pd
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 
-def load_data(file_path):
-    """Load JSON data from a file."""
-    with open(file_path, 'r') as f:
-        return json.load(f)
+def load_data(file) -> dict:
+    """Load JSON data from a file-like object."""
+    return json.load(file)
 
 
 def create_chrome_options():
@@ -66,13 +67,7 @@ class SeleniumManager:
 def fetch_detailed_match_data(match_id, driver=None):
     """
     Fetch detailed match data using Selenium.
-
-    Args:
-        match_id: ID of the match to fetch.
-        driver: Selenium WebDriver instance; if None, a temporary one is created.
-
-    Returns:
-        A dictionary with detailed match data.
+    Returns a dictionary with the match details.
     """
     should_close_driver = False
     if driver is None:
@@ -84,9 +79,9 @@ def fetch_detailed_match_data(match_id, driver=None):
 
     try:
         url = f"https://api.tracker.gg/api/v2/marvel-rivals/standard/matches/{match_id}"
-        print(f"Fetching detailed data for match {match_id}")
+        st.info(f"Fetching detailed data for match {match_id}")
         driver.get(url)
-        time.sleep(3)
+        time.sleep(3)  # wait for content to load
 
         try:
             json_text = driver.find_element(By.TAG_NAME, "pre").text
@@ -102,7 +97,7 @@ def fetch_detailed_match_data(match_id, driver=None):
         data = json.loads(json_text)
         return data.get('data', data)
     except Exception as e:
-        print(f"Error fetching match {match_id}: {e}")
+        st.error(f"Error fetching match {match_id}: {e}")
         return None
     finally:
         if should_close_driver:
@@ -112,12 +107,8 @@ def fetch_detailed_match_data(match_id, driver=None):
 def cluster_tournament_matches(data):
     """
     Group tournament matches into clusters based on time proximity.
-
-    Matches that occur within 24 hours are clustered as part of the same
-    tournament.
-
-    Returns:
-        A list of tournament clusters (each a list of match dictionaries).
+    Matches that occur within 24 hours are clustered as part of the same tournament.
+    Returns a list of tournament clusters (each a list of match dictionaries).
     """
     matches = []
     for match in data.get('matches', []):
@@ -155,13 +146,6 @@ def cluster_tournament_matches(data):
 def calculate_per_10(value, duration_seconds):
     """
     Calculate a per-10-minute rate based on match duration.
-
-    Args:
-        value: The stat value.
-        duration_seconds: Duration of the match in seconds.
-
-    Returns:
-        Stat rate per 10 minutes.
     """
     minutes = duration_seconds / 60
     return (value / minutes) * 10 if minutes > 0 else 0
@@ -170,9 +154,7 @@ def calculate_per_10(value, duration_seconds):
 def extract_player_stats(match_data, player_ign):
     """
     Extract detailed player statistics from a match.
-
-    Uses the main player's IGN to separate team and opponent stats and adds
-    per-10-minute calculations.
+    Returns two lists: team_stats and opponent_stats.
     """
     team_stats = []
     opponent_stats = []
@@ -272,259 +254,9 @@ def format_duration(seconds):
     return f"{minutes:02d}:{sec:02d}"
 
 
-def generate_match_report(match_info, filter_teammates=False, player_ign=None):
-    """
-    Generate a detailed match report.
-
-    Args:
-        match_info: Dictionary containing match details.
-        filter_teammates: If True, include only teammates of `player_ign`.
-        player_ign: The main player's in-game name.
-
-    Returns:
-        A formatted string report.
-    """
-    lines = [
-        f"Match: {match_info['map']} ({match_info['mode']})",
-        f"Date: {match_info['timestamp']}",
-        f"Duration: {match_info['duration']}",
-        f"Result: {match_info['result'].upper()} ({match_info['score']})",
-        ""
-    ]
-
-    # Filter team stats if required.
-    if filter_teammates and player_ign:
-        team_id = next(
-            (p['team_id'] for p in match_info['team_stats']
-             if p['name'] == player_ign),
-            None
-        )
-        teammates = [p for p in match_info['team_stats']
-                     if p['team_id'] == team_id] if team_id is not None \
-            else match_info['team_stats']
-    else:
-        teammates = match_info['team_stats']
-
-    header = (
-        "{:<15} {:<12} {:<8} {:<8} {:<8} {:<7} {:<8} {:<8} {:<10} {:<8}"
-    ).format("Player", "Hero", "K(P10)", "D(P10)", "A(P10)", "KDA",
-             "DMG/10", "HEAL/10", "K.Part%", "Acc%")
-    lines.append("Team Performance:")
-    lines.append(header)
-    lines.append("-" * len(header))
-    for player in teammates:
-        hero = player['heroes'][0] if player['heroes'] else "Unknown"
-        kills_str = f"{player.get('kills', 0)}({player.get('kills_per_10', 0):.1f})"
-        deaths_str = f"{player.get('deaths', 0)}({player.get('deaths_per_10', 0):.1f})"
-        assists_str = f"{player.get('assists', 0)}({player.get('assists_per_10', 0):.1f})"
-        special = "MVP" if player.get('is_mvp') else "SVP" if player.get('is_svp') else ""
-        lines.append(
-            "{:<15} {:<12} {:<8} {:<8} {:<8} {:<7.2f} {:<8.0f} {:<8.0f} "
-            "{:<10.1f} {:<8.1f} {}".format(
-                player['name'], hero, kills_str, deaths_str, assists_str,
-                player.get('kdaRatio', 0), player.get('damage_per_10', 0),
-                player.get('healing_per_10', 0),
-                player.get('kill_participation', 0),
-                player.get('accuracy', 0), special
-            )
-        )
-    lines.append("")
-
-    # Additional team stats.
-    header2 = (
-        "{:<15} {:<8} {:<8} {:<8} {:<10} {:<8} {:<8}"
-    ).format("Player", "SoloK", "LastK", "HeadK", "DMG Taken", "ShieldH", "Triple+")
-    lines.append("Additional Team Stats:")
-    lines.append(header2)
-    lines.append("-" * len(header2))
-    for player in teammates:
-        multi_kills = player.get('continueKills3', 0)
-        lines.append(
-            "{:<15} {:<8} {:<8} {:<8} {:<10.0f} {:<8} {:<8}".format(
-                player['name'],
-                player.get('soloKills', 0),
-                player.get('lastKills', 0),
-                player.get('headKills', 0),
-                player.get('totalDamageTaken', 0),
-                player.get('shieldHits', 0),
-                multi_kills
-            )
-        )
-    lines.append("")
-
-    # Opponent performance (if available).
-    if match_info.get('opponent_stats'):
-        header3 = (
-            "{:<15} {:<12} {:<8} {:<8} {:<8} {:<7} {:<8} {:<8} {:<10} {:<8}"
-        ).format("Player", "Hero", "K(P10)", "D(P10)", "A(P10)", "KDA",
-                 "DMG/10", "HEAL/10", "K.Part%", "Acc%")
-        lines.append("Opponent Performance:")
-        lines.append(header3)
-        lines.append("-" * len(header3))
-        for player in match_info['opponent_stats']:
-            hero = player['heroes'][0] if player['heroes'] else "Unknown"
-            kills_str = f"{player.get('kills', 0)}({player.get('kills_per_10', 0):.1f})"
-            deaths_str = f"{player.get('deaths', 0)}({player.get('deaths_per_10', 0):.1f})"
-            assists_str = f"{player.get('assists', 0)}({player.get('assists_per_10', 0):.1f})"
-            lines.append(
-                "{:<15} {:<12} {:<8} {:<8} {:<8} {:<7.2f} {:<8.0f} {:<8.0f} "
-                "{:<10.1f} {:<8.1f}".format(
-                    player['name'], hero, kills_str, deaths_str, assists_str,
-                    player.get('kdaRatio', 0), player.get('damage_per_10', 0),
-                    player.get('healing_per_10', 0),
-                    player.get('kill_participation', 0),
-                    player.get('accuracy', 0)
-                )
-            )
-        lines.append("")
-    return "\n".join(lines)
-
-
-def generate_player_report(player_name, stats):
-    """
-    Generate a detailed tournament performance report for a single player.
-
-    Args:
-        player_name: The player's in-game name.
-        stats: A dictionary containing aggregated stats for the player.
-
-    Returns:
-        A formatted string report.
-    """
-    lines = [
-        f"Player: {player_name}",
-        f"Matches Played: {stats['matches_played']}",
-        f"Record: {stats['wins']}-{stats['losses']} ({stats['win_rate']:.1f}% win rate)",
-        f"Heroes Played: {', '.join(stats['heroes_played'])}",
-        f"Best Hero: {stats.get('best_hero', 'N/A')} (Best KDA: {stats['best_kda']:.2f})",
-        "",
-        "Average Stats Per Match:",
-        f"KDA: {stats['avg_kda']:.2f}",
-        f"K/D/A: {stats['avg_kills']:.1f}/{stats['avg_deaths']:.1f}/{stats['avg_assists']:.1f}",
-    ]
-    if 'avg_kills_per_10' in stats:
-        lines.append(
-            f"Per 10 min: {stats['avg_kills_per_10']:.1f}/"
-            f"{stats['avg_deaths_per_10']:.1f}/"
-            f"{stats['avg_assists_per_10']:.1f}"
-        )
-    lines.extend([
-        f"Final Blows: {stats['avg_last_kills']:.2f}",
-        f"Solo Kills: {stats['avg_solo_kills']:.2f}",
-        f"Damage: {stats['avg_damage']:.0f}",
-        f"Healing: {stats['avg_healing']:.0f}",
-        f"Average Kill Participation: {stats.get('avg_kill_participation', 0):.1f}%",
-        "",
-        "Match Performances:"
-    ])
-    header = (
-        "{:<10} {:<12} {:<6} {:<12} {:<12} {:<7} {:<8} {:<8} {:<10}"
-    ).format("Match", "Hero", "Result", "K/D/A", "Per 10min", "KDA",
-              "DMG/10", "HEAL/10", "K.Part%")
-    lines.append(header)
-    lines.append("-" * len(header))
-    for perf in stats.get('match_performances', []):
-        special = " (MVP)" if perf.get('is_mvp') else " (SVP)" if perf.get('is_svp') else ""
-        match_num = perf['match_id'].split('_')[-1]
-        kda_str = f"{perf['kills']}/{perf['deaths']}/{perf['assists']}"
-        per_10_str = (
-            f"{perf['kills_per_10']:.1f}/{perf['deaths_per_10']:.1f}/{perf['assists_per_10']:.1f}"
-            if 'kills_per_10' in perf else ""
-        )
-        lines.append(
-            "{:<10} {:<12} {:<6} {:<12} {:<12} {:<7.2f} {:<8.0f} {:<8.0f} "
-            "{:<10.1f}{}".format(
-                match_num, perf['hero'], perf['result'].upper(), kda_str,
-                per_10_str, perf['kda'], perf.get('damage_per_10', 0),
-                perf.get('healing_per_10', 0), perf.get('kill_participation', 0),
-                special
-            )
-        )
-    return "\n".join(lines)
-
-
-def generate_tournament_report(tournament, player_ign, detailed=True):
-    """
-    Generate a comprehensive tournament report.
-
-    This includes an overall summary, a performance summary for teammates,
-    and (if detailed=True) detailed match and player reports.
-    """
-    lines = []
-    start_date = tournament['start_date'].strftime('%Y-%m-%d')
-    end_date = tournament['end_date'].strftime('%Y-%m-%d')
-    lines.append(f"Tournament #{tournament['id']}")
-    if start_date == end_date:
-        lines.append(f"Date: {start_date}")
-    else:
-        lines.append(f"Date Range: {start_date} to {end_date}")
-    lines.append(f"Matches: {tournament['match_count']}")
-    lines.append("")
-
-    team_wins = sum(1 for m in tournament['matches'] if m['result'] == 'win')
-    team_losses = tournament['match_count'] - team_wins
-    lines.append(f"Team Record: {team_wins}-{team_losses}")
-    lines.append("")
-
-    # Identify teammates from matches.
-    teammates = set()
-    for match in tournament['matches']:
-        team_id = next(
-            (p['team_id'] for p in match['team_stats']
-             if p['name'] == player_ign), None
-        )
-        if team_id is not None:
-            teammates.update(
-                p['name'] for p in match['team_stats'] if p['team_id'] == team_id
-            )
-
-    lines.append("Team Performance Summary:")
-    header = (
-        "{:<15} {:<12} {:<8} {:<8} {:<12} {:<12} {:<8}"
-    ).format("Player", "Record", "WinRate", "BestHero", "BestKDA",
-              "K/D/A", "AvgDMG")
-    lines.append(header)
-    lines.append("-" * len(header))
-    for pname, stats in tournament['player_stats'].items():
-        if pname in teammates:
-            record = f"{stats['wins']}-{stats['losses']}"
-            kd_a = f"{stats['avg_kills']:.1f}/{stats['avg_deaths']:.1f}/{stats['avg_assists']:.1f}"
-            lines.append(
-                "{:<15} {:<12} {:<8.1f} {:<8} {:<12.2f} {:<12} {:<8.0f}".format(
-                    pname, record, stats['win_rate'],
-                    stats.get('best_hero', 'N/A'),
-                    stats['best_kda'], kd_a, stats['avg_damage']
-                )
-            )
-    lines.append("")
-    lines.append("Match Results:")
-    for i, match in enumerate(tournament['matches']):
-        lines.append(
-            f"Match {i + 1}: {match['map']} ({match['mode']}) - "
-            f"{match['result'].upper()} ({match['score']})"
-        )
-    lines.append("")
-    if detailed:
-        lines.append("=== DETAILED MATCH REPORTS ===")
-        for i, match in enumerate(tournament['matches']):
-            lines.append("")
-            lines.append(f"--- MATCH {i + 1} DETAILS ---")
-            lines.append(generate_match_report(match, filter_teammates=True,
-                                               player_ign=player_ign))
-        lines.append("=== DETAILED PLAYER REPORTS ===")
-        for pname, stats in tournament['player_stats'].items():
-            if pname in teammates:
-                lines.append("")
-                lines.append(f"--- {pname.upper()} TOURNAMENT PERFORMANCE ---")
-                lines.append(generate_player_report(pname, stats))
-    return "\n".join(lines)
-
-
-def analyze_tournaments(data, detailed=True, cache_dir=None):
+def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
     """
     Analyze tournament data for a player and aggregate stats.
-
-    Uses detailed match data if available (with caching support).
     Returns a list of tournament analysis results.
     """
     player_ign = data.get('ign')
@@ -729,9 +461,9 @@ def analyze_tournaments(data, detailed=True, cache_dir=None):
                         stats['avg_solo_kills_per_10'] = (stats['total_solo_kills'] / total_min) * 10
                         stats['avg_deaths_per_10'] = (stats['total_deaths'] / total_min) * 10
                         stats['avg_assists_per_10'] = (stats['total_assists'] / total_min) * 10
-                        stats['avg_damage_per_10'] = (stats['total_damage'] / total_min) * 10
-                        stats['avg_healing_per_10'] = (stats['total_healing'] / total_min) * 10
-                        stats['avg_damage_taken_per_10'] = (stats['total_damage_taken'] / total_min) * 10
+                        stats['avg_damage_per_10'] = round((stats['total_damage'] / total_min) * 10, 0)
+                        stats['avg_healing_per_10'] = round((stats['total_healing'] / total_min) * 10, 0)
+                        stats['avg_damage_taken_per_10'] = round((stats['total_damage_taken'] / total_min) * 10, 0)
                     stats['heroes_played'] = list(stats['heroes_played'])
                     stats['win_rate'] = (stats['wins'] / stats['matches_played']) * 100
 
@@ -742,46 +474,100 @@ def analyze_tournaments(data, detailed=True, cache_dir=None):
             driver.quit()
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze Marvel Rivals tournament data"
-    )
-    parser.add_argument('file', help='Path to the player data JSON file')
-    parser.add_argument('--cache', help='Directory to cache detailed match data',
-                        default='match_cache')
-    parser.add_argument('--output', help='Directory to save reports',
-                        default='tournament_reports')
-    args = parser.parse_args()
-
-    if not os.path.exists(args.output):
-        os.makedirs(args.output)
-
-    print(f"Loading data from {args.file}")
-    data = load_data(args.file)
-    player_ign = data.get('ign', 'unknown_player')
-    print(f"Analyzing tournaments for player {player_ign}")
-    tournaments = analyze_tournaments(data, detailed=True, cache_dir=args.cache)
-
-    print("Generating tournament reports")
-    for tournament in tournaments:
-        report = generate_tournament_report(tournament, player_ign, detailed=True)
-        report_filename = os.path.join(args.output, f"{player_ign}_tournament_{tournament['id']}.txt")
-        with open(report_filename, 'w', encoding='utf-8') as f:
-            f.write(report)
-        print(f"Report saved to {report_filename}")
-
-    print("\nTournament Summary:")
-    for tournament in tournaments:
-        wins = sum(1 for m in tournament['matches'] if m['result'] == 'win')
-        losses = tournament['match_count'] - wins
-        date_str = tournament['start_date'].strftime('%Y-%m-%d')
-        if date_str != tournament['end_date'].strftime('%Y-%m-%d'):
-            date_str = f"{date_str} to {tournament['end_date'].strftime('%Y-%m-%d')}"
-        print(
-            f"Tournament #{tournament['id']} - {date_str}: "
-            f"{wins}-{losses} ({tournament['match_count']} matches)"
-        )
+def player_stats_to_df(player_stats: dict) -> pd.DataFrame:
+    """Convert aggregated player stats into a Pandas DataFrame."""
+    rows = []
+    for player, stats in player_stats.items():
+        rows.append({
+            "Player": player,
+            "Matches Played": stats["matches_played"],
+            "Wins": stats["wins"],
+            "Losses": stats["losses"],
+            "Win Rate (%)": round(stats["win_rate"], 1),
+            "Best Hero": stats["best_hero"] if stats["best_hero"] else "N/A",
+            "Best KDA": round(stats["best_kda"], 2),
+            "Avg KDA": round(stats["avg_kda"], 2),
+            "Avg Final Blows": round(stats["avg_last_kills"], 2),
+            "Avg Solo Kils": round(stats["avg_solo_kills"], 2),
+            "K/D/A": f"{stats['avg_kills']:.1f}/{stats['avg_deaths']:.1f}/{stats['avg_assists']:.1f}",
+            "Avg Damage": round(stats["avg_damage"], 0),
+            "Avg Healing": round(stats["avg_healing"], 0),
+            "Avg Kill Participation (%)": round(stats["avg_kill_participation"], 1)
+        })
+    return pd.DataFrame(rows)
 
 
-if __name__ == "__main__":
-    main()
+def match_performances_to_df(match_performances: list) -> pd.DataFrame:
+    """Convert a list of match performance dictionaries into a DataFrame."""
+    return pd.DataFrame(match_performances)
+
+
+# ------------- Streamlit Dashboard ------------- #
+
+st.set_page_config(page_title="Marvel Rivals Tournament Dashboard", layout="wide")
+st.title("Marvel Rivals Tournament Dashboard")
+
+st.markdown("""
+This dashboard displays aggregated tournament stats and team performance.
+Upload your player JSON data below to begin.
+""")
+
+uploaded_file = st.file_uploader("Choose a JSON file", type=["json"])
+
+if uploaded_file is not None:
+    try:
+        data = load_data(uploaded_file)
+        player_ign = data.get('ign', 'unknown_player')
+        st.success(f"Data loaded for player: **{player_ign}**")
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+        st.stop()
+
+    # Option to run detailed analysis (will fetch match data via Selenium)
+    detailed_mode = st.checkbox("Use detailed match data (may take longer)", value=True)
+
+    with st.spinner("Analyzing tournaments..."):
+        tournaments = analyze_tournaments(data, detailed=detailed_mode)
+
+    if not tournaments:
+        st.warning("No tournament matches found.")
+        st.stop()
+
+    # If more than one tournament, let the user select which one to view.
+    tournament_options = {
+        f"Tournament #{t['id']} ({t['start_date'].strftime('%Y-%m-%d')} - {t['end_date'].strftime('%Y-%m-%d')})": t
+        for t in tournaments
+    }
+    selected_tournament_label = st.selectbox("Select Tournament", list(tournament_options.keys()))
+    tournament = tournament_options[selected_tournament_label]
+
+    st.subheader(f"Tournament #{tournament['id']} Overview")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"**Date:** {tournament['start_date'].strftime('%Y-%m-%d')} to {tournament['end_date'].strftime('%Y-%m-%d')}")
+    with col2:
+        st.markdown(f"**Matches:** {tournament['match_count']}")
+    with col3:
+        team_wins = sum(1 for m in tournament['matches'] if m['result'] == 'win')
+        team_losses = tournament['match_count'] - team_wins
+        st.markdown(f"**Team Record:** {team_wins} - {team_losses}")
+
+    st.markdown("---")
+    st.subheader("Team Performance")
+    player_stats_df = player_stats_to_df(tournament['player_stats'])
+    st.dataframe(player_stats_df, use_container_width=True)
+
+    st.markdown("Use the table header to sort by any column.")
+
+    # Optional: select a team member to view detailed match performances.
+    team_members = sorted(list(tournament['player_stats'].keys()))
+    selected_member = st.selectbox("View detailed match performances for:", team_members)
+    member_stats = tournament['player_stats'][selected_member]
+    if member_stats.get("match_performances"):
+        st.subheader(f"Match Performances for {selected_member}")
+        perf_df = match_performances_to_df(member_stats["match_performances"])
+        st.dataframe(perf_df, use_container_width=True)
+    else:
+        st.info("No match performance data available for this player.")
+else:
+    st.info("Awaiting JSON file upload.")
