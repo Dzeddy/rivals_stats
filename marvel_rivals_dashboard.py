@@ -2,7 +2,7 @@
 """
 Marvel Rivals Tournament Dashboard
 
-This module loads player JSON data, fetches detailed match data via Selenium,
+This module loads player JSON data, fetches detailed match data via direct API requests,
 clusters tournament matches, extracts per‑10 and aggregate player statistics,
 and displays an interactive dashboard where you can sort team members by any
 displayed stat and view an overview of team performance.
@@ -16,10 +16,7 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 import pandas as pd
-from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
+import requests
 
 
 def load_data(file) -> dict:
@@ -27,81 +24,29 @@ def load_data(file) -> dict:
     return json.load(file)
 
 
-def create_chrome_options():
-    """Configure and return Chrome options for Selenium."""
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-    )
-    return options
-
-
-class SeleniumManager:
+def fetch_detailed_match_data(match_id):
     """
-    Context manager for Selenium WebDriver.
-
-    This class simplifies driver creation and cleanup.
-    """
-
-    def __init__(self):
-        self.driver = webdriver.Chrome(options=create_chrome_options())
-        # Hide Selenium property for more natural behavior.
-        self.driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-
-    def __enter__(self):
-        return self.driver
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.driver.quit()
-
-
-def fetch_detailed_match_data(match_id, driver=None):
-    """
-    Fetch detailed match data using Selenium.
+    Fetch detailed match data using direct HTTP requests.
     Returns a dictionary with the match details.
     """
-    should_close_driver = False
-    if driver is None:
-        driver = webdriver.Chrome(options=create_chrome_options())
-        driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        should_close_driver = True
-
     try:
         url = f"https://api.tracker.gg/api/v2/marvel-rivals/standard/matches/{match_id}"
         st.info(f"Fetching detailed data for match {match_id}")
-        driver.get(url)
-        time.sleep(3)  # wait for content to load
 
-        try:
-            json_text = driver.find_element(By.TAG_NAME, "pre").text
-        except NoSuchElementException:
-            page_source = driver.page_source
-            start = page_source.find('{')
-            end = page_source.rfind('}') + 1
-            if start >= 0 and end > start:
-                json_text = page_source[start:end]
-            else:
-                raise Exception("Could not find JSON content in the page")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://tracker.gg/marvel-rivals/"
+        }
 
-        data = json.loads(json_text)
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Raise an exception for 4XX/5XX responses
+
+        data = response.json()
         return data.get('data', data)
     except Exception as e:
         st.error(f"Error fetching match {match_id}: {e}")
         return None
-    finally:
-        if should_close_driver:
-            driver.quit()
 
 
 def cluster_tournament_matches(data):
@@ -164,7 +109,7 @@ def extract_player_stats(match_data, player_ign):
     main_team = None
     for segment in match_data.get('segments', []):
         if segment.get('type') == 'player' and (
-            segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
+                segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
         ):
             main_team = segment['metadata'].get('teamId')
             break
@@ -221,9 +166,9 @@ def extract_player_stats(match_data, player_ign):
         # Calculate accuracy if possible.
         if player_info.get('mainAttacks', 0) > 0:
             player_info['accuracy'] = (
-                player_info.get('mainAttackHits', 0) /
-                player_info.get('mainAttacks', 0)
-            ) * 100
+                                              player_info.get('mainAttackHits', 0) /
+                                              player_info.get('mainAttacks', 0)
+                                      ) * 100
         else:
             player_info['accuracy'] = 0
 
@@ -242,8 +187,8 @@ def extract_player_stats(match_data, player_ign):
         if total_kills:
             for p in group:
                 p['kill_participation'] = (
-                    (p.get('kills', 0) + p.get('assists', 0)) / total_kills
-                ) * 100
+                                                  (p.get('kills', 0) + p.get('assists', 0)) / total_kills
+                                          ) * 100
 
     return team_stats, opponent_stats
 
@@ -269,7 +214,7 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
     for match in data.get('matches', []):
         for segment in match.get('segments', []):
             if segment.get('type') == 'overview' and (
-                segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
+                    segment['metadata']['platformInfo']['platformUserHandle'] == player_ign
             ):
                 player_team = segment['metadata'].get('teamId')
                 break
@@ -281,13 +226,6 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
 
     tournaments_cluster = cluster_tournament_matches(data)
     tournament_results = []
-    driver = None
-
-    if detailed:
-        driver = webdriver.Chrome(options=create_chrome_options())
-        driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
 
     try:
         for idx, tournament in enumerate(tournaments_cluster):
@@ -330,7 +268,7 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
                         detailed_match = json.load(f)
 
                 if detailed and not detailed_match:
-                    detailed_match = fetch_detailed_match_data(match_id, driver)
+                    detailed_match = fetch_detailed_match_data(match_id)
                     if cache_file and detailed_match:
                         with open(cache_file, 'w') as f:
                             json.dump(detailed_match, f, indent=2)
@@ -469,9 +407,9 @@ def analyze_tournaments(data, detailed=True, cache_dir="match_cache"):
 
             tournament_results.append(tournament_info)
         return tournament_results
-    finally:
-        if driver:
-            driver.quit()
+    except Exception as e:
+        st.error(f"Error analyzing tournaments: {e}")
+        return []
 
 
 def player_stats_to_df(player_stats: dict) -> pd.DataFrame:
@@ -488,7 +426,7 @@ def player_stats_to_df(player_stats: dict) -> pd.DataFrame:
             "Best KDA": round(stats["best_kda"], 2),
             "Avg KDA": round(stats["avg_kda"], 2),
             "Avg Final Blows": round(stats["avg_last_kills"], 2),
-            "Avg Solo Kils": round(stats["avg_solo_kills"], 2),
+            "Avg Solo Kills": round(stats["avg_solo_kills"], 2),
             "K/D/A": f"{stats['avg_kills']:.1f}/{stats['avg_deaths']:.1f}/{stats['avg_assists']:.1f}",
             "Avg Damage": round(stats["avg_damage"], 0),
             "Avg Healing": round(stats["avg_healing"], 0),
@@ -523,7 +461,7 @@ if uploaded_file is not None:
         st.error(f"Error loading file: {e}")
         st.stop()
 
-    # Option to run detailed analysis (will fetch match data via Selenium)
+    # Option to run detailed analysis (will fetch match data via API)
     detailed_mode = st.checkbox("Use detailed match data (may take longer)", value=True)
 
     with st.spinner("Analyzing tournaments..."):
@@ -544,7 +482,8 @@ if uploaded_file is not None:
     st.subheader(f"Tournament #{tournament['id']} Overview")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown(f"**Date:** {tournament['start_date'].strftime('%Y-%m-%d')} to {tournament['end_date'].strftime('%Y-%m-%d')}")
+        st.markdown(
+            f"**Date:** {tournament['start_date'].strftime('%Y-%m-%d')} to {tournament['end_date'].strftime('%Y-%m-%d')}")
     with col2:
         st.markdown(f"**Matches:** {tournament['match_count']}")
     with col3:
