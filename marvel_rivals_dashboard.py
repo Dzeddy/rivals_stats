@@ -30,6 +30,7 @@ def fetch_detailed_match_data(match_id):
     Returns a dictionary with the match details.
     """
     try:
+        time.sleep(300)
         url = f"https://api.tracker.gg/api/v2/marvel-rivals/standard/matches/{match_id}"
         st.info(f"Fetching detailed data for match {match_id}")
 
