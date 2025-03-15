@@ -19,9 +19,11 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from webdriver_manager.firefox import GeckoDriverManager
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.firefox.service import Service
+from webdriver_manager.firefox import GeckoDriverManager
+
 
 # 2. Replace the create_chrome_options function with this
 def create_firefox_options():
@@ -33,8 +35,8 @@ def create_firefox_options():
 
 # 3. Replace the driver initialization (around line 30) with this
 try:
-    driver = webdriver.Firefox(service=FirefoxService(GeckoDriverManager().install()),
-                              options=create_firefox_options())
+    service = Service(GeckoDriverManager().install())
+    driver = webdriver.Firefox(service=service, options=create_firefox_options())
 except Exception as e:
     print(f"Error initializing WebDriver: {e}")
 
